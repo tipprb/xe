@@ -585,7 +585,7 @@ func requestSync(h host.Host, pid peer.ID, ledger *core.Ledger, quarantine *bloc
 			rejectedAccounts = resp.Rejected
 			gotTerminal = true
 		}
-		if len(allBlocks) >= maxTotalBlocks {
+		if len(allBlocks) >= maxTotalBlocks && resp.HasMore {
 			logging.Warnf("sync: hit maxTotalBlocks cap (%d), stopping", maxTotalBlocks)
 			isTruncated = true
 			break
@@ -765,6 +765,9 @@ func findMissingBlocksPaginated(remoteFrontiers map[string]string, ledger *core.
 				HasMore:   true,
 				Truncated: true,
 			}
+		} else {
+			// A complete, empty response must still acknowledge convergence.
+			ch <- SyncResponse{HasMore: false}
 		}
 	}()
 	return ch

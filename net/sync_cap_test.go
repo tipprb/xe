@@ -123,3 +123,76 @@ func TestSyncResponseTruncatedJSON(t *testing.T) {
 		t.Fatalf("expected omitempty to drop 'truncated' field when false, got %s", string(cleanData))
 	}
 }
+
+func TestSyncEqualFrontiersAcknowledgesConvergence(t *testing.T) {
+	s := store.NewMemStore()
+	l := core.NewLedger(s, core.LedgerConfig{})
+	const account = "synced-peer"
+
+	block := &core.Block{Account: account, Hash: fmt.Sprintf("%064x", 1)}
+	if err := s.PutAccountChain(account, &core.AccountChain{Blocks: []*core.Block{block}}); err != nil {
+		t.Fatalf("PutAccountChain: %v", err)
+	}
+	if err := s.PutFrontier(account, block.Hash); err != nil {
+		t.Fatalf("PutFrontier: %v", err)
+	}
+
+	// Remote peer already has identical frontiers
+	request := l.Frontiers()
+
+	var responses []SyncResponse
+	for resp := range findMissingBlocksPaginated(request, l, 64) {
+		responses = append(responses, resp)
+	}
+
+	if len(responses) != 1 {
+		t.Fatalf("expected exactly 1 terminal frame for identical frontiers, got %d", len(responses))
+	}
+	if responses[0].HasMore {
+		t.Fatalf("expected hasMore=false for identical frontiers, got true")
+	}
+	if responses[0].Truncated {
+		t.Fatalf("expected truncated=false for identical frontiers, got true")
+	}
+	if len(responses[0].Blocks) != 0 {
+		t.Fatalf("expected 0 blocks, got %d", len(responses[0].Blocks))
+	}
+}
+
+func TestSyncExactCap10000Blocks(t *testing.T) {
+	s := store.NewMemStore()
+	l := core.NewLedger(s, core.LedgerConfig{})
+	const account = "exact-10000-peer"
+
+	const totalBlocks = 10000
+	blocks := make([]*core.Block, totalBlocks)
+	for i := range blocks {
+		blocks[i] = &core.Block{Account: account, Hash: fmt.Sprintf("%064x", i+1)}
+	}
+	if err := s.PutAccountChain(account, &core.AccountChain{Blocks: blocks}); err != nil {
+		t.Fatalf("PutAccountChain: %v", err)
+	}
+	if err := s.PutFrontier(account, blocks[totalBlocks-1].Hash); err != nil {
+		t.Fatalf("PutFrontier: %v", err)
+	}
+
+	request := l.Frontiers()
+	delete(request, account)
+
+	var allBlocks []*core.Block
+	var lastResp SyncResponse
+	for resp := range findMissingBlocksPaginated(request, l, 64) {
+		allBlocks = append(allBlocks, resp.Blocks...)
+		lastResp = resp
+	}
+
+	if len(allBlocks) != 10000 {
+		t.Fatalf("expected exactly 10,000 blocks, got %d", len(allBlocks))
+	}
+	if lastResp.HasMore {
+		t.Fatalf("expected hasMore=false for exact 10,000-block chain, got true")
+	}
+	if lastResp.Truncated {
+		t.Fatalf("expected truncated=false for exact 10,000-block chain, got true")
+	}
+}
